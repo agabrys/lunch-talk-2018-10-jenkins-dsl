@@ -1,0 +1,51 @@
+def commitId=''
+
+pipeline {
+	agent {
+		label 'master'
+	}
+	options {
+		checkoutToSubdirectory('repository')
+	}
+	stages {
+		stage('Validate Parameters') {
+			steps {
+				script {
+					if (params.CHANGED_BRANCH == null || params.CHANGED_BRANCH.matches('^\\s*$')) {
+						error('CHANGED_BRANCH is required!')
+					}
+				}
+			}
+		}
+		stage('Determine Commit ID') {
+			steps {
+				script {
+					def command = "git ls-remote \"$params.PRODUCT_REPO_URL\" \"refs/heads/$params.CHANGED_BRANCH\""
+					def stdout
+					if (isUnix()) {
+						stdout = sh(returnStdout: true, script: command)
+					} else {
+						stdout = bat(returnStdout: true, script: '@echo off && ' + command)
+					}
+					commitId = stdout.trim().split('\t')[0]
+				}
+			}			
+		}
+		stage('Start Pipeline') {
+			steps {
+				build job: 'pipeline', parameters: [
+					[$class: 'StringParameterValue', name: 'PRODUCT_REPO_URL', value: params.PRODUCT_REPO_URL],
+					[$class: 'StringParameterValue', name: 'CHANGED_BRANCH', value: params.CHANGED_BRANCH],
+					[$class: 'StringParameterValue', name: 'PRIORITY', value: params.PRIORITY],
+				], wait: false
+			}
+		}
+	}
+	post {
+		success {
+			dir(env.CSP_STORAGE + '/tested_commits') {
+				writeFile file: commitId, text: 'marker'
+			}
+		}
+	}
+}

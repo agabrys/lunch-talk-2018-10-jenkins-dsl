@@ -1,0 +1,73 @@
+pipeline {
+	agent any
+	options {
+		timestamps()
+	}
+	tools {
+		// withMaven ignores tools: https://issues.jenkins-ci.org/browse/JENKINS-43651
+		maven '3.5.4'
+		jdk '8'
+	}
+	stages {
+		stage('Prepare Workspace') {
+			steps {
+				cleanWs()
+			}
+		}
+		stage('Validate Parameters') {
+			steps {
+				script {
+					if (params.PRODUCT_REPO_URL == null || params.PRODUCT_REPO_URL.matches('^\\s*$')) {
+						error('PRODUCT_REPO_URL is required!')
+					}
+					if (params.CHANGED_BRANCH == null || params.CHANGED_BRANCH.matches('^\\s*$')) {
+						error('CHANGED_BRANCH is required!')
+					}
+				}
+			}
+		}
+		stage('Checkout') {
+			steps {
+				git url: params.PRODUCT_REPO_URL, branch: params.CHANGED_BRANCH, poll: false
+			}
+		}
+		stage('Build') {
+			steps {
+				withMaven(maven: '3.5.4', jdk: '8', publisherStrategy: 'EXPLICIT', options: [
+					artifactsPublisher(disabled: false),
+					dependenciesFingerprintPublisher(disabled: false),
+					openTasksPublisher(disabled: false)
+				]) {
+					bat 'mvn package -DskipTests'
+				}
+				stash name: 'build', excludes: '.repository'
+			}
+		}
+		stage('Parallel') {
+			parallel {
+				stage('Verify') {
+					steps {
+						unstash 'build'
+						withMaven(maven: '3.5.4', jdk: '8', publisherStrategy: 'EXPLICIT', options: [
+							junitPublisher(disabled: false)
+						]) {
+							bat 'mvn verify'
+						}
+					}
+				}
+				stage('Build Docs') {
+					steps {
+						withMaven(maven: '3.5.4', jdk: '8', publisherStrategy: 'EXPLICIT') {
+							bat 'mvn site'
+						}
+					}
+				}
+			}
+		}
+		stage('Deploy') {
+			steps {
+				echo 'Fake deploy'
+			}
+		}
+	}
+}

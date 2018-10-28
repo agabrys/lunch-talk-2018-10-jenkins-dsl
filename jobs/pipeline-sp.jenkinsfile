@@ -1,0 +1,68 @@
+def transformToStage(recipe) {
+	return {
+		node {
+			stage("Test $recipe") {
+				echo "Fake stage"
+			}
+		}
+	}
+}
+
+node {
+	timestamps {
+		stage('Prepare Workspace') {
+			cleanWs()
+		}
+		stage('Validate Parameters') {
+			if (params.PRODUCT_REPO_URL == null || params.PRODUCT_REPO_URL.matches('^\\s*$')) {
+				error('PRODUCT_REPO_URL is required!')
+			}
+			if (params.CHANGED_BRANCH == null || params.CHANGED_BRANCH.matches('^\\s*$')) {
+				error('CHANGED_BRANCH is required!')
+			}
+		}
+		stage('Checkout') {
+			git url: params.PRODUCT_REPO_URL, branch: params.CHANGED_BRANCH, poll: false
+		}
+		stage('Build') {
+			withMaven(maven: '3.5.4', jdk: '8', publisherStrategy: 'EXPLICIT', options: [
+				artifactsPublisher(disabled: false),
+				dependenciesFingerprintPublisher(disabled: false),
+				openTasksPublisher(disabled: false)
+			]) {
+				bat 'mvn package -DskipTests'
+			}
+			stash name: 'build', excludes: '.repository'
+		}
+		stage('Parallel') {
+			def stepsForParallel = [:]
+			stepsForParallel['first'] = {
+				stage('Build Docs') {
+					withMaven(maven: '3.5.4', jdk: '8', publisherStrategy: 'EXPLICIT') {
+						bat 'mvn site'
+					}
+				}
+			}
+			stepsForParallel['second'] = {
+				node {
+					stage('Verify') {
+						unstash 'build'
+						withMaven(maven: '3.5.4', jdk: '8', publisherStrategy: 'EXPLICIT', options: [
+							junitPublisher(disabled: false)
+						]) {
+							bat 'mvn verify'
+						}
+					}
+				}
+			}
+			def recipes = ['A', 'B', 'C', 'D', 'E', 'F']
+			for (def recipe : recipes) {
+				stepsForParallel["Test $recipe"] = transformToStage(recipe)
+			}
+			parallel stepsForParallel
+		}
+		stage('Deploy') {
+			echo 'Fake deploy'
+		}
+	}
+}
